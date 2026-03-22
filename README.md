@@ -1,16 +1,19 @@
-# React + Vite
+# Community Orchestra
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Build an orchestra with your friends!
 
-Currently, two official plugins are available:
+The magic of an orchestra (or any band or choir) comes from playing with the relationships between different instruments. Many voices layered in harmony.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Like different musical instruments, all of us have our own unique voice and perspective. In the Community Orchestra you decide what the sound of your voice should be! Record any sound you like and use it to create a rhythm or melody.
 
-## React Compiler
+Link with other artists to share sounds and unlock the ability to record more tracks.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Layer tracks to orchestrate your own symphony. The more friends you link with, the more sounds and tracks you can play.
 
-## Expanding the ESLint configuration
+Then re-record your sound, and start again!
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+
+
+# About the code
+
+This web-app was built with Claude on a React + Vite template with HMR and some ESLint rules. The React Compiler is not enabled because of its impact on dev & build performances. 
