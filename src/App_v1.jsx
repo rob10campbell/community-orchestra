@@ -1,9 +1,11 @@
+/* eslint-disable react-hooks/exhaustive-deps */
+/* eslint-disable no-unused-vars */
+/* eslint-disable no-empty */
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Volume2, VolumeX } from "lucide-react";
 
 const MAX_SLOTS = 5;
 const LOOP_DURATION = 5;
-const SERVER = "http://YOUR_LOCAL_IP:3001";
 const COLORS = [
   { bg: "#7F77DD", light: "#EEEDFE", dark: "#3C3489" },
   { bg: "#1D9E75", light: "#E1F5EE", dark: "#085041" },
@@ -17,6 +19,8 @@ const DEMO_USERS = [
   { name: "Cleo",  sound: { type: "sine",     freq: 440, dur: 0.4  } },
   { name: "Dev",   sound: { type: "triangle", freq: 660, dur: 0.2  } },
 ];
+
+const SERVER = "https://community-orchestra.onrender.com";
 
 function makeCode(name) {
   const hash = [...name.toUpperCase()].reduce((a,c) => (a*31 + c.charCodeAt(0)) & 0xffff, 0);
@@ -46,28 +50,6 @@ function trimSilence(ctx, buf, threshold=0.01) {
   const out = ctx.createBuffer(buf.numberOfChannels, buf.length-first, buf.sampleRate);
   for (let c=0; c<buf.numberOfChannels; c++) out.copyToChannel(buf.getChannelData(c).slice(first), c);
   return out;
-}
-
-function encodeWAV(audioBuf) {
-  const numCh = audioBuf.numberOfChannels;
-  const numSamples = audioBuf.length;
-  const sr = audioBuf.sampleRate;
-  const buf = new ArrayBuffer(44 + numSamples * numCh * 2);
-  const view = new DataView(buf);
-  const str = (off, s) => { for (let i=0;i<s.length;i++) view.setUint8(off+i, s.charCodeAt(i)); };
-  str(0,"RIFF"); view.setUint32(4,36+numSamples*numCh*2,true);
-  str(8,"WAVE"); str(12,"fmt ");
-  view.setUint32(16,16,true); view.setUint16(20,1,true);
-  view.setUint16(22,numCh,true); view.setUint32(24,sr,true);
-  view.setUint32(28,sr*numCh*2,true); view.setUint16(32,numCh*2,true);
-  view.setUint16(34,16,true); str(36,"data");
-  view.setUint32(40,numSamples*numCh*2,true);
-  let off=44;
-  for (let i=0;i<numSamples;i++) for (let ch=0;ch<numCh;ch++) {
-    const s=Math.max(-1,Math.min(1,audioBuf.getChannelData(ch)[i]));
-    view.setInt16(off,s<0?s*0x8000:s*0x7FFF,true); off+=2;
-  }
-  return buf;
 }
 
 function MyCopyCode({ username, notify }) {
@@ -122,6 +104,7 @@ function LoginScreen({ onEnter, prefillLink }) {
   );
 }
 
+// ── Track ─────────────────────────────────────────────────────
 function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, onUnlink, isOwn, onRecordingChange, anyRecording }) {
   const eventsRef = useRef([]);
   const [events, setEvents] = useState([]);
@@ -197,7 +180,7 @@ function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, o
     const node = startNoteFromBuf(buf, 0.8);
     if (node) loopNodesRef.current["live"] = node;
     pendingHoldRef.current = { start: t, pressedSlot: pressedSlotIdx };
-  }, [getBuffer, startNoteFromBuf, stopNote]);
+  }, [recording, getBuffer, startNoteFromBuf, stopNote]);
 
   const onPressUp = useCallback((pressedSlotIdx) => {
     stopNote(loopNodesRef.current["live"]); delete loopNodesRef.current["live"];
@@ -210,7 +193,7 @@ function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, o
       }
       pendingHoldRef.current = null;
     }
-  }, [stopNote]);
+  }, [recording, stopNote]);
 
   const startRecord = () => {
     if (anyRecording && !recording) return;
@@ -288,20 +271,25 @@ function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, o
         </div>
       </div>
       <div style={{ display:"flex",alignItems:"center",gap:4,flexShrink:0 }}>
+
         {hasEvents&&!recording&&(
-          <>
-            <button onClick={toggleMute} title={muted?"Unmute":"Mute"}
-              style={{ fontSize:13,width:24,height:24,borderRadius:5,border:"1px solid var(--color-border-secondary)",background:muted?slot.color.bg:"transparent",color:muted?"#fff":"var(--color-text-tertiary)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}>
-              {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+            <>
+              <button onClick={toggleMute} title={muted?"Unmute":"Mute"}
+                style={{ fontSize:13,width:24,height:24,borderRadius:5,border:"1px solid var(--color-border-secondary)",background:muted?slot.color.bg:"transparent",color:muted?"#fff":"var(--color-text-tertiary)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}>
+                {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+              </button>
+            </>
+          )}
+
+          {!recording?(
+            <button onClick={startRecord}
+              disabled={muted}
+              style={{ width:28,height:28,borderRadius:"50%",border:"none",background:anyRecording&&!recording?"var(--color-border-secondary)":muted?"var(--color-border-secondary)":slot.color.bg,cursor:(anyRecording&&!recording)||muted?"default":"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:(anyRecording&&!recording)||muted?0.4:1 }}>
+              {hasEvents
+                ? <span style={{ fontSize:13,color:"#fff",lineHeight:1 }}>↺</span>
+                : <div style={{ width:9,height:9,borderRadius:"50%",background:"#fff" }} />
+              }
             </button>
-          </>
-        )}
-        {!recording?(
-          <button onClick={startRecord}
-            disabled={muted}
-            style={{ width:28,height:28,borderRadius:"50%",border:"none",background:(anyRecording&&!recording)||muted?"var(--color-border-secondary)":slot.color.bg,cursor:(anyRecording&&!recording)||muted?"default":"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:(anyRecording&&!recording)||muted?0.4:1 }}>
-            {hasEvents ? <span style={{ fontSize:13,color:"#fff",lineHeight:1 }}>↺</span> : <div style={{ width:9,height:9,borderRadius:"50%",background:"#fff" }} />}
-          </button>
         ):(
           <button onClick={()=>finishRecord(false)}
             style={{ width:28,height:28,borderRadius:"50%",border:"none",background:"#E24B4A",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,animation:"pulse 0.7s ease-in-out infinite" }}>
@@ -312,10 +300,6 @@ function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, o
           <>
             <button onClick={clearTrack} title="Clear"
               style={{ fontSize:11,width:24,height:24,borderRadius:5,border:"1px solid var(--color-border-secondary)",background:"transparent",color:"var(--color-text-tertiary)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}>✕</button>
-            <button onClick={toggleMute} title={muted?"Unmute":"Mute"}
-              style={{ fontSize:13,width:24,height:24,borderRadius:5,border:"1px solid var(--color-border-secondary)",background:muted?slot.color.bg:"transparent",color:muted?"#fff":"var(--color-text-tertiary)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}>
-              {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
-            </button>
           </>
         )}
       </div>
@@ -323,6 +307,7 @@ function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, o
   );
 }
 
+// ── Instrument ────────────────────────────────────────────────
 function Instrument({ username, autoLinkWith }) {
   const ctxRef = useRef(null);
   const getCtx = useCallback(() => {
@@ -336,9 +321,6 @@ function Instrument({ username, autoLinkWith }) {
   const heldNodesRef = useRef({});
   const playheadRafRef = useRef(null);
   const globalPlayingRef = useRef(false);
-  const micRecorderRef = useRef(null);
-  const micChunksRef = useRef([]);
-  const micCountdownRef = useRef(null);
 
   const [slots, setSlots] = useState([{ owner:username, color:COLORS[0], hasSound:false }]);
   const [activeBtn, setActiveBtn] = useState(null);
@@ -351,11 +333,12 @@ function Instrument({ username, autoLinkWith }) {
   const [activeRecording, setActiveRecording] = useState(null);
   const [linkCodeInput, setLinkCodeInput] = useState("");
   const [linkCodeError, setLinkCodeError] = useState(null);
-  const [micRecording, setMicRecording] = useState(false);
-  const [micCountdown, setMicCountdown] = useState(null);
 
   const notify = (msg,dur=2500) => { setNotification(msg); setTimeout(()=>setNotification(null),dur); };
-  const handleRecordingChange = useCallback((state) => { setActiveRecording(state.recording ? state : null); }, []);
+
+  const handleRecordingChange = useCallback((state) => {
+    setActiveRecording(state.recording ? state : null);
+  }, []);
 
   const getDemoBuffer = useCallback((userName) => {
     const ctx=getCtx(), key=`demo_${userName}`;
@@ -420,65 +403,55 @@ function Instrument({ username, autoLinkWith }) {
     setActiveBtn(null);
   }, [getCtx]);
 
-  const processAudioBlob = useCallback(async (blob) => {
+const handleUpload = async (file) => {
+    if (!file) return; setUploadError(null);
     try {
-      const ab = await blob.arrayBuffer();
-      const ctx = getCtx();
+      const ab = await file.arrayBuffer(), ctx = getCtx();
       if (ctx.state==="suspended") await ctx.resume();
       const raw = await ctx.decodeAudioData(ab);
       const trimmed = trimSilence(ctx, raw);
       audioBuffersRef.current[0] = trimmed;
       setSlots(s=>{const n=[...s];n[0]={...n[0],hasSound:true};return n;});
-      notify("Sound ready! Uploading…");
-      const wav = encodeWAV(trimmed);
-      const wavBlob = new Blob([wav], { type:"audio/wav" });
+      notify("Audio loaded! Uploading to server…");
+
+      // Re-encode trimmed buffer to WAV blob for upload
+      const numCh = trimmed.numberOfChannels;
+      const numSamples = trimmed.length;
+      const sampleRate = trimmed.sampleRate;
+      const wavBuffer = new ArrayBuffer(44 + numSamples * numCh * 2);
+      const view = new DataView(wavBuffer);
+      const writeStr = (off, str) => { for (let i=0;i<str.length;i++) view.setUint8(off+i, str.charCodeAt(i)); };
+      writeStr(0, "RIFF");
+      view.setUint32(4, 36 + numSamples * numCh * 2, true);
+      writeStr(8, "WAVE");
+      writeStr(12, "fmt ");
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, numCh, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * numCh * 2, true);
+      view.setUint16(32, numCh * 2, true);
+      view.setUint16(34, 16, true);
+      writeStr(36, "data");
+      view.setUint32(40, numSamples * numCh * 2, true);
+      let offset = 44;
+      for (let i=0; i<numSamples; i++) {
+        for (let ch=0; ch<numCh; ch++) {
+          const s = Math.max(-1, Math.min(1, trimmed.getChannelData(ch)[i]));
+          view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+          offset += 2;
+        }
+      }
+      const wavBlob = new Blob([wavBuffer], { type: "audio/wav" });
+
       try {
         const form = new FormData();
         form.append("audio", wavBlob, `${makeCode(username)}.wav`);
         const res = await fetch(`${SERVER}/audio/${makeCode(username)}`, { method:"POST", body:form });
-        if (res.ok) notify("Sound uploaded! Others can now link with your code.");
-        else notify("Sound ready locally, but server upload failed.");
-      } catch { notify("Sound ready locally. Server unavailable."); }
-    } catch { setUploadError("Couldn't decode audio. Please try again."); }
-  }, [getCtx, username]);
-
-  const startMicRecord = async () => {
-    setUploadError(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
-      micChunksRef.current = [];
-      const mimeType = ["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/ogg"].find(t=>MediaRecorder.isTypeSupported(t)) || "";
-      const mr = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      mr.ondataavailable = e => { if (e.data?.size>0) micChunksRef.current.push(e.data); };
-      mr.onstop = async () => {
-        stream.getTracks().forEach(t=>t.stop());
-        if (!micChunksRef.current.length) { setUploadError("No audio captured. Try again."); return; }
-        const blob = new Blob(micChunksRef.current, { type: mimeType||"audio/webm" });
-        await processAudioBlob(blob);
-      };
-      mr.start(100);
-      micRecorderRef.current = mr;
-      setMicRecording(true);
-      let t=10; setMicCountdown(t);
-      micCountdownRef.current = setInterval(()=>{
-        t--;
-        if (t<=0) { clearInterval(micCountdownRef.current); setMicCountdown(null); mr.stop(); setMicRecording(false); }
-        else setMicCountdown(t);
-      }, 1000);
-    } catch { setUploadError("Mic access denied. Please allow microphone access and try again."); }
-  };
-
-  const stopMicRecord = () => {
-    if (micRecorderRef.current && micRecording) {
-      clearInterval(micCountdownRef.current); setMicCountdown(null);
-      micRecorderRef.current.stop(); setMicRecording(false);
-    }
-  };
-
-  const handleUpload = async (file) => {
-    if (!file) return;
-    setUploadError(null);
-    await processAudioBlob(file);
+        if (res.ok) notify("Audio loaded and shared!");
+        else notify("Audio loaded locally, but server upload failed.");
+      } catch { notify("Audio loaded locally. Server unavailable."); }
+    } catch { setUploadError("Couldn't decode that file. Try WAV, MP3, or M4A."); }
   };
 
   const unlinkSlot = useCallback((ownerName) => {
@@ -518,39 +491,42 @@ function Instrument({ username, autoLinkWith }) {
       setSlots(prev=>[...prev,{owner:demoName,color,hasSound:true}]);
       notify(`${makeCode(demoName)} added as button ${slots.length+1}! 🎵`,3000);
     } else {
-      notify(`Looking up ${raw}…`,1500);
-      try {
-        const res = await fetch(`${SERVER}/audio/${raw}`);
-        if (res.ok) {
-          const blob = await res.blob();
-          const ab = await blob.arrayBuffer();
-          const ctx = getCtx();
-          if (ctx.state==="suspended") await ctx.resume();
-          const audioBuf = await ctx.decodeAudioData(ab);
-          const key = `custom_${ownerName}`;
-          audioBuffersRef.current[key] = trimSilence(ctx, audioBuf);
-          setSlots(prev=>[...prev,{owner:ownerName,color,hasSound:true,customKey:key}]);
-          notify(`${raw} linked! Their sound added as button ${slots.length+1}! 🎵`,3000);
-        } else {
-          const ctx=getCtx();
-          const hash=[...ownerName].reduce((a,c)=>(a*31+c.charCodeAt(0))&0xffff,0);
-          const buf=synthBuffer(ctx,["sine","square","sawtooth","triangle"][hash%4],110+(hash%8)*55,0.35);
-          const key=`custom_${ownerName}`;
-          audioBuffersRef.current[key]=buf;
-          setSlots(prev=>[...prev,{owner:ownerName,color,hasSound:true,customKey:key}]);
-          notify(`${raw} linked with demo sound (they haven't uploaded yet).`,3000);
+          // Try fetching real audio from server first
+          notify(`Looking up ${raw}…`, 1500);
+          try {
+            const res = await fetch(`${SERVER}/audio/${raw}`);
+            if (res.ok) {
+              const blob = await res.blob();
+              const ab = await blob.arrayBuffer();
+              const ctx = getCtx();
+              if (ctx.state==="suspended") await ctx.resume();
+              const audioBuf = await ctx.decodeAudioData(ab);
+              const key = `custom_${ownerName}`;
+              audioBuffersRef.current[key] = audioBuf;
+              setSlots(prev=>[...prev,{owner:ownerName,color,hasSound:true,customKey:key}]);
+              notify(`${raw} linked! Their real sound added as button ${slots.length+1}! 🎵`,3000);
+            } else {
+              // Fall back to synth tone if not found on server
+              const ctx=getCtx();
+              const hash=[...ownerName].reduce((a,c)=>(a*31+c.charCodeAt(0))&0xffff,0);
+              const buf=synthBuffer(ctx,["sine","square","sawtooth","triangle"][hash%4],110+(hash%8)*55,0.35);
+              const key=`custom_${ownerName}`;
+              audioBuffersRef.current[key]=buf;
+              setSlots(prev=>[...prev,{owner:ownerName,color,hasSound:true,customKey:key}]);
+              notify(`${raw} linked with demo sound (they haven't uploaded audio yet).`,3000);
+            }
+          } catch {
+            // Server unreachable — fall back to synth
+            const ctx=getCtx();
+            const hash=[...ownerName].reduce((a,c)=>(a*31+c.charCodeAt(0))&0xffff,0);
+            const buf=synthBuffer(ctx,["sine","square","sawtooth","triangle"][hash%4],110+(hash%8)*55,0.35);
+            const key=`custom_${ownerName}`;
+            audioBuffersRef.current[key]=buf;
+            setSlots(prev=>[...prev,{owner:ownerName,color,hasSound:true,customKey:key}]);
+            notify(`${raw} linked with demo sound (server unreachable).`,3000);
+          }
         }
-      } catch {
-        const ctx=getCtx();
-        const hash=[...ownerName].reduce((a,c)=>(a*31+c.charCodeAt(0))&0xffff,0);
-        const buf=synthBuffer(ctx,["sine","square","sawtooth","triangle"][hash%4],110+(hash%8)*55,0.35);
-        const key=`custom_${ownerName}`;
-        audioBuffersRef.current[key]=buf;
-        setSlots(prev=>[...prev,{owner:ownerName,color,hasSound:true,customKey:key}]);
-        notify(`${raw} linked with demo sound (server unreachable).`,3000);
-      }
-    }
-    setLinkCodeInput("");
+        setLinkCodeInput("");
   };
 
   useEffect(()=>{
@@ -601,10 +577,15 @@ function Instrument({ username, autoLinkWith }) {
             const isActive=activeBtn===i;
             return (
               <button key={i}
-                onPointerDown={e=>{ e.currentTarget.setPointerCapture(e.pointerId); if(activeRecording) activeRecording.onPressDown(i); else startHold(i); }}
+                onPointerDown={e=>{
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  if (activeRecording) activeRecording.onPressDown(i);
+                  else startHold(i);
+                }}
                 onPointerUp={()=>{ if(activeRecording) activeRecording.onPressUp(i); else stopHold(i); }}
                 onPointerLeave={()=>{ if(activeRecording) activeRecording.onPressUp(i); else stopHold(i); }}
-                style={{ background:isActive?slot.color.bg:slot.color.light,border:`2px solid ${slot.color.bg}66`,borderRadius:12,padding:"14px 4px 10px",cursor:"pointer",transition:"all 0.07s",transform:isActive?"scale(0.91)":"scale(1)",display:"flex",flexDirection:"column",alignItems:"center",gap:5,touchAction:"none",userSelect:"none",boxShadow:activeRecording?`0 0 0 2px ${slot.color.bg}44`:"none" }}>
+                style={{ background:isActive?slot.color.bg:slot.color.light,border:`2px solid ${slot.color.bg}66`,borderRadius:12,padding:"14px 4px 10px",cursor:"pointer",transition:"all 0.07s",transform:isActive?"scale(0.91)":"scale(1)",display:"flex",flexDirection:"column",alignItems:"center",gap:5,touchAction:"none",userSelect:"none",
+                  boxShadow:activeRecording?`0 0 0 2px ${slot.color.bg}44`:"none" }}>
                 <div style={{ width:32,height:32,borderRadius:"50%",background:slot.color.bg,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:500,fontSize:15 }}>{i+1}</div>
                 <div style={{ fontSize:9,color:slot.color.dark,fontWeight:500,textAlign:"center",lineHeight:1.3,fontFamily:"var(--font-mono)" }}>{makeCode(slot.owner).split("-")[0]}</div>
               </button>
@@ -646,47 +627,29 @@ function Instrument({ username, autoLinkWith }) {
         </div>
       </div>
 
-      {/* Your sound */}
+      {/* Upload */}
       <div style={{ background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:12,padding:16,marginBottom:16 }}>
         <div style={{ fontSize:13,fontWeight:500,marginBottom:4 }}>Your sound</div>
-        <p style={{ fontSize:12,color:"var(--color-text-tertiary)",margin:"0 0 12px" }}>Record directly or upload a file.</p>
+        <p style={{ fontSize:12,color:"var(--color-text-tertiary)",margin:"0 0 12px" }}>Upload a voice memo, clap, hum — anything short works best.</p>
         {uploadError&&<div style={{ fontSize:12,color:"var(--color-text-danger)",background:"var(--color-background-danger)",border:"1px solid var(--color-border-danger)",borderRadius:7,padding:"8px 12px",marginBottom:10 }}>{uploadError}</div>}
-        <div style={{ marginBottom:14 }}>
-          <div style={{ fontSize:12,color:"var(--color-text-tertiary)",marginBottom:8 }}>Option 1 — record with your mic</div>
-          <div style={{ display:"flex",alignItems:"center",gap:10 }}>
-            {!micRecording
-              ? <button onClick={startMicRecord} style={{ background:COLORS[0].bg,color:"#fff",border:"none",borderRadius:8,padding:"10px 18px",fontSize:13,fontWeight:500,cursor:"pointer" }}>
-                  {slots[0].hasSound?"Re-record":"Record (up to 10s)"}
-                </button>
-              : <button onClick={stopMicRecord} style={{ background:"#E24B4A",color:"#fff",border:"none",borderRadius:8,padding:"10px 18px",fontSize:13,fontWeight:500,cursor:"pointer",animation:"pulse 0.7s ease-in-out infinite" }}>
-                  {micCountdown!==null?`Recording… ${micCountdown}s`:"Stop"}
-                </button>
-            }
-            {micRecording&&<div style={{ display:"flex",gap:3 }}>{[0,1,2].map(i=><div key={i} style={{ width:5,height:5,borderRadius:"50%",background:"#E24B4A",animation:`bounce 0.8s ease-in-out ${i*0.15}s infinite` }} />)}</div>}
-          </div>
-        </div>
-        <div style={{ borderTop:"1px solid var(--color-border-tertiary)",paddingTop:12 }}>
-          <div style={{ fontSize:12,color:"var(--color-text-tertiary)",marginBottom:8 }}>Option 2 — upload a file</div>
-          <label style={{ display:"inline-flex",alignItems:"center",gap:8,background:"var(--color-background-primary)",color:"var(--color-text-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:8,padding:"10px 18px",fontSize:13,fontWeight:500,cursor:"pointer" }}>
+        <div style={{ display:"flex",justifyContent:"center",marginBottom:16 }}>
+          <label style={{ display:"inline-flex",alignItems:"center",gap:8,background:COLORS[0].bg,color:"#fff",border:"none",borderRadius:8,padding:"10px 18px",fontSize:13,fontWeight:500,cursor:"pointer" }}>
             {slots[0].hasSound?"Replace sound":"Upload audio"}
-            <input type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.ogg,.aac,.mp4" style={{display:"none"}} onChange={e=>{handleUpload(e.target.files[0]);e.target.value="";}} />
+            <input type="file" accept="audio/*" style={{display:"none"}} onChange={e=>{handleUpload(e.target.files[0]);e.target.value="";}} />
           </label>
-          <p style={{ fontSize:11,color:"var(--color-text-tertiary)",margin:"8px 0 0" }}>WAV, MP3, M4A, or any audio file.</p>
         </div>
-      </div>
-
-      {/* Link with another artist */}
-      <div style={{ background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:12,padding:16,marginBottom:16 }}>
-        <div style={{ fontSize:13,fontWeight:500,marginBottom:4 }}>Link with another artist</div>
-        <p style={{ fontSize:12,color:"var(--color-text-tertiary)",margin:"0 0 10px" }}>Enter someone else's code to add their sound.</p>
-        {linkCodeError&&<div style={{ fontSize:12,color:"var(--color-text-danger)",background:"var(--color-background-danger)",border:"1px solid var(--color-border-danger)",borderRadius:7,padding:"8px 12px",marginBottom:10 }}>{linkCodeError}</div>}
-        <div style={{ display:"flex",gap:8,marginBottom:12 }}>
-          <input placeholder="e.g. AVA-3821" value={linkCodeInput} onChange={e=>setLinkCodeInput(e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&submitLinkCode()} maxLength={12}
-            autoCorrect="off" autoCapitalize="characters" spellCheck={false}
-            style={{ flex:1,padding:"10px 12px",fontSize:13,border:"1.5px solid var(--color-border-secondary)",borderRadius:8,background:"var(--color-background-primary)",color:"var(--color-text-primary)",outline:"none",fontFamily:"var(--font-mono)",letterSpacing:"0.05em" }} />
-          <button onClick={submitLinkCode} style={{ padding:"10px 18px",fontSize:13,fontWeight:500,background:COLORS[0].bg,color:"#fff",border:"none",borderRadius:8,cursor:"pointer" }}>Link</button>
+        <div style={{ borderTop:"1px solid var(--color-border-tertiary)",paddingTop:14 }}>
+          <div style={{ fontSize:13,fontWeight:500,marginBottom:4 }}>Link with another artist</div>
+          <p style={{ fontSize:12,color:"var(--color-text-tertiary)",margin:"0 0 10px" }}>Enter someone else's code to add their sound.</p>
+          {linkCodeError&&<div style={{ fontSize:12,color:"var(--color-text-danger)",background:"var(--color-background-danger)",border:"1px solid var(--color-border-danger)",borderRadius:7,padding:"8px 12px",marginBottom:10 }}>{linkCodeError}</div>}
+          <div style={{ display:"flex",gap:8,marginBottom:12 }}>
+            <input placeholder="e.g. AVA-3821" value={linkCodeInput} onChange={e=>setLinkCodeInput(e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&submitLinkCode()} maxLength={12}
+              autoCorrect="off" autoCapitalize="characters" spellCheck={false}
+              style={{ flex:1,padding:"10px 12px",fontSize:13,border:"1.5px solid var(--color-border-secondary)",borderRadius:8,background:"var(--color-background-primary)",color:"var(--color-text-primary)",outline:"none",fontFamily:"var(--font-mono)",letterSpacing:"0.05em" }} />
+            <button onClick={submitLinkCode} style={{ padding:"10px 18px",fontSize:13,fontWeight:500,background:COLORS[0].bg,color:"#fff",border:"none",borderRadius:8,cursor:"pointer" }}>Link</button>
+          </div>
+          <MyCopyCode username={username} notify={notify} />
         </div>
-        <MyCopyCode username={username} notify={notify} />
       </div>
 
       {/* Linked artists (code-linked) */}
@@ -737,10 +700,7 @@ function Instrument({ username, autoLinkWith }) {
           })}
         </div>
       </div>
-      <style>{`
-        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
-        @keyframes bounce{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.9)}}
-      `}</style>
+      <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}`}</style>
     </div>
   );
 }
