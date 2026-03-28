@@ -81,6 +81,7 @@ function RecordModal({ onClose, onAudioReady }) {
   const canvasRef = useRef(null);
   const animFrameRef = useRef(null);
   const audioCtxRef = useRef(null);
+  const submitOnStopRef = useRef(false);
 
   const stopWaveform = () => {
     cancelAnimationFrame(animFrameRef.current);
@@ -172,19 +173,17 @@ function RecordModal({ onClose, onAudioReady }) {
     } catch { setError("Mic access denied. Please allow microphone access."); setPhase("idle"); }
   };
 
-  const submitOnStopRef = useRef(false);
+  const reRecord = () => { doStart(); };
 
-  const submit = () => { if (blobRef.current) onAudioReady(blobRef.current); };
-
-  const handleSubmitBtn = () => {
-    if (phase==="recording") {
-      submitOnStopRef.current = true;
-      clearInterval(countdownRef.current); setCountdown(null);
-      mediaRecorderRef.current?.stop();
-    } else {
-      submit();
-    }
-  };
+    const handleSubmit = () => {
+      if (phase==="recording") {
+        submitOnStopRef.current = true;
+        clearInterval(countdownRef.current); setCountdown(null);
+        mediaRecorderRef.current?.stop();
+      } else if (phase==="recorded" && blobRef.current) {
+        onAudioReady(blobRef.current);
+      }
+    };
 
   useEffect(() => () => {
     clearInterval(countdownRef.current);
@@ -230,21 +229,22 @@ function RecordModal({ onClose, onAudioReady }) {
         )}
 
         <div style={{ display:"flex",gap:10 }}>
-          <button onClick={reRecord}
-            disabled={phase==="idle"}
-            style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:"var(--color-background-secondary)",color:phase==="idle"?"var(--color-text-tertiary)":"var(--color-text-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:10,cursor:phase==="idle"?"default":"pointer",opacity:phase==="idle"?0.4:1 }}>
-            {phase==="idle" ? "RE-RECORD" : "RE-RECORD"}
-          </button>
           {phase==="idle" ? (
             <button onClick={doStart}
               style={{ flex:1,padding:"14px",fontSize:15,fontWeight:500,background:"#E24B4A",color:"#fff",border:"none",borderRadius:10,cursor:"pointer",letterSpacing:"0.03em" }}>
               RECORD
             </button>
           ) : (
-            <button onClick={handleSubmitBtn}
-              style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:COLORS[0].bg,color:"#fff",border:"none",borderRadius:10,cursor:"pointer" }}>
-              SUBMIT
-            </button>
+            <>
+              <button onClick={reRecord}
+                style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:"var(--color-background-secondary)",color:"var(--color-text-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:10,cursor:"pointer" }}>
+                RE-RECORD
+              </button>
+              <button onClick={handleSubmit}
+                style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:COLORS[0].bg,color:"#fff",border:"none",borderRadius:10,cursor:"pointer" }}>
+                SUBMIT
+              </button>
+            </>
           )}
         </div>
 
