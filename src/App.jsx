@@ -148,7 +148,12 @@ function RecordModal({ onClose, onAudioReady }) {
         stopWaveform();
         if (chunksRef.current.length) {
           blobRef.current = new Blob(chunksRef.current, { type: mimeType||"audio/webm" });
-          setPhase("recorded");
+          if (submitOnStopRef.current) {
+            submitOnStopRef.current = false;
+            onAudioReady(blobRef.current);
+          } else {
+            setPhase("recorded");
+          }
         } else {
           setError("No audio captured. Try again.");
           setPhase("idle");
@@ -167,8 +172,19 @@ function RecordModal({ onClose, onAudioReady }) {
     } catch { setError("Mic access denied. Please allow microphone access."); setPhase("idle"); }
   };
 
-  const reRecord = () => { blobRef.current=null; doStart(); };
+  const submitOnStopRef = useRef(false);
+
   const submit = () => { if (blobRef.current) onAudioReady(blobRef.current); };
+
+  const handleSubmitBtn = () => {
+    if (phase==="recording") {
+      submitOnStopRef.current = true;
+      clearInterval(countdownRef.current); setCountdown(null);
+      mediaRecorderRef.current?.stop();
+    } else {
+      submit();
+    }
+  };
 
   useEffect(() => () => {
     clearInterval(countdownRef.current);
@@ -225,8 +241,8 @@ function RecordModal({ onClose, onAudioReady }) {
               RECORD
             </button>
           ) : (
-            <button onClick={submit} disabled={phase==="recording"}
-              style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:phase==="recorded"?COLORS[0].bg:"var(--color-background-secondary)",color:phase==="recorded"?"#fff":"var(--color-text-tertiary)",border:"none",borderRadius:10,cursor:phase==="recorded"?"pointer":"default",opacity:phase==="recording"?0.4:1 }}>
+            <button onClick={handleSubmitBtn}
+              style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:COLORS[0].bg,color:"#fff",border:"none",borderRadius:10,cursor:"pointer" }}>
               SUBMIT
             </button>
           )}
