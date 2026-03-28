@@ -3,7 +3,8 @@ import { Volume2, VolumeX } from "lucide-react";
 
 const MAX_SLOTS = 5;
 const LOOP_DURATION = 5;
-const SERVER = "http://YOUR_LOCAL_IP:3001";
+const SERVER = import.meta.env.VITE_SERVER_URL || "http://localhost:3001";
+
 const COLORS = [
   { bg: "#7F77DD", light: "#EEEDFE", dark: "#3C3489" },
   { bg: "#1D9E75", light: "#E1F5EE", dark: "#085041" },
@@ -49,9 +50,7 @@ function trimSilence(ctx, buf, threshold=0.01) {
 }
 
 function encodeWAV(audioBuf) {
-  const numCh = audioBuf.numberOfChannels;
-  const numSamples = audioBuf.length;
-  const sr = audioBuf.sampleRate;
+  const numCh = audioBuf.numberOfChannels, numSamples = audioBuf.length, sr = audioBuf.sampleRate;
   const buf = new ArrayBuffer(44 + numSamples * numCh * 2);
   const view = new DataView(buf);
   const str = (off, s) => { for (let i=0;i<s.length;i++) view.setUint8(off+i, s.charCodeAt(i)); };
@@ -70,19 +69,198 @@ function encodeWAV(audioBuf) {
   return buf;
 }
 
+// ── Record Modal ──────────────────────────────────────────────
+function RecordModal({ onClose, onAudioReady }) {
+  const [phase, setPhase] = useState("idle"); // idle | recording | recorded
+  const [countdown, setCountdown] = useState(null);
+  const [error, setError] = useState(null);
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const countdownRef = useRef(null);
+  const streamRef = useRef(null);
+  const blobRef = useRef(null);
+  const canvasRef = useRef(null);
+  const animFrameRef = useRef(null);
+  const audioCtxRef = useRef(null);
+
+  const stopWaveform = () => {
+    cancelAnimationFrame(animFrameRef.current);
+    if (audioCtxRef.current) { try { audioCtxRef.current.close(); } catch {} audioCtxRef.current = null; }
+  };
+
+  const drawWaveform = (stream) => {
+    audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+    const src = audioCtxRef.current.createMediaStreamSource(stream);
+    const analyser = audioCtxRef.current.createAnalyser();
+    analyser.fftSize = 1024;
+    src.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const draw = () => {
+      if (!canvasRef.current) return;
+      animFrameRef.current = requestAnimationFrame(draw);
+      analyser.getByteTimeDomainData(data);
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext("2d");
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0,0,w,h);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#E24B4A";
+      ctx.beginPath();
+      const slice = w / data.length;
+      let x = 0;
+      for (let i=0; i<data.length; i++) {
+        const y = (data[i]/128) * (h/2);
+        i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+        x += slice;
+      }
+      ctx.stroke();
+    };
+    draw();
+  };
+
+  const startRecording = async () => {
+    setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
+      streamRef.current = stream;
+      chunksRef.current = [];
+      const mimeType = ["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/ogg"].find(t=>MediaRecorder.isTypeSupported(t)) || "";
+      const mr = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      mr.ondataavailable = e => { if (e.data?.size>0) chunksRef.current.push(e.data); };
+      mr.onstop = () => {
+        streamRef.current?.getTracks().forEach(t=>t.stop());
+        stopWaveform();
+        if (chunksRef.current.length) {
+          blobRef.current = new Blob(chunksRef.current, { type: mimeType||"audio/webm" });
+          setPhase("recorded");
+        } else {
+          setError("No audio captured. Try again.");
+          setPhase("idle");
+        }
+      };
+      mr.start(100);
+      mediaRecorderRef.current = mr;
+      setPhase("recording");
+      drawWaveform(stream);
+      let t=10; setCountdown(t);
+      countdownRef.current = setInterval(()=>{
+        t--;
+        if (t<=0) { clearInterval(countdownRef.current); setCountdown(null); mr.stop(); }
+        else setCountdown(t);
+      }, 1000);
+    } catch { setError("Mic access denied. Please allow microphone access."); }
+  };
+
+  const stopRecording = () => {
+    clearInterval(countdownRef.current); setCountdown(null);
+    mediaRecorderRef.current?.stop();
+  };
+
+  const reRecord = () => { blobRef.current=null; setPhase("idle"); stopWaveform(); };
+  const submit = () => { if (blobRef.current) onAudioReady(blobRef.current); };
+
+  useEffect(() => () => {
+    clearInterval(countdownRef.current);
+    streamRef.current?.getTracks().forEach(t=>t.stop());
+    stopWaveform();
+  }, []);
+
+  return (
+    <div onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}
+      style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:1000,padding:"0 0 24px" }}>
+      <div style={{ background:"var(--color-background-primary)",borderRadius:20,padding:"24px 20px 20px",width:"100%",maxWidth:480,display:"flex",flexDirection:"column",gap:16 }}>
+
+        <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between" }}>
+          <h2 style={{ fontSize:17,fontWeight:500,margin:0 }}>
+            {phase==="idle"?"Record your sound":phase==="recording"?"Recording…":"Review recording"}
+          </h2>
+          <button onClick={onClose} style={{ background:"none",border:"none",fontSize:22,cursor:"pointer",color:"var(--color-text-tertiary)",lineHeight:1 }}>×</button>
+        </div>
+
+        <div style={{ background:"#111",borderRadius:12,overflow:"hidden",height:100,display:"flex",alignItems:"center",justifyContent:"center" }}>
+          {phase==="recording" ? (
+            <canvas ref={canvasRef} width={440} height={100} style={{ width:"100%",height:"100%" }} />
+          ) : phase==="recorded" ? (
+            <div style={{ display:"flex",alignItems:"center",gap:8,color:"#1D9E75",fontSize:13,fontWeight:500 }}>
+              <div style={{ width:10,height:10,borderRadius:"50%",background:"#1D9E75" }} />
+              Recording ready
+            </div>
+          ) : (
+            <div style={{ color:"#666",fontSize:13 }}>Waveform will appear here</div>
+          )}
+        </div>
+
+        {phase==="recording" && countdown!==null && (
+          <div style={{ textAlign:"center",fontSize:13,color:"var(--color-text-tertiary)" }}>
+            Auto-stops in {countdown}s
+          </div>
+        )}
+
+        {error && (
+          <div style={{ fontSize:12,color:"var(--color-text-danger)",background:"var(--color-background-danger)",border:"1px solid var(--color-border-danger)",borderRadius:7,padding:"8px 12px" }}>{error}</div>
+        )}
+
+        <div style={{ display:"flex",gap:10 }}>
+          {phase==="idle" && (
+            <button onClick={startRecording}
+              style={{ flex:1,padding:"14px",fontSize:15,fontWeight:500,background:"#E24B4A",color:"#fff",border:"none",borderRadius:10,cursor:"pointer",letterSpacing:"0.03em" }}>
+              RECORD
+            </button>
+          )}
+          {phase==="recording" && (
+            <>
+              <button onClick={reRecord}
+                style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:"var(--color-background-secondary)",color:"var(--color-text-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:10,cursor:"pointer" }}>
+                RE-RECORD
+              </button>
+              <button onClick={stopRecording}
+                style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:"#E24B4A",color:"#fff",border:"none",borderRadius:10,cursor:"pointer",animation:"pulse 0.7s ease-in-out infinite" }}>
+                STOP
+              </button>
+            </>
+          )}
+          {phase==="recorded" && (
+            <>
+              <button onClick={reRecord}
+                style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:"var(--color-background-secondary)",color:"var(--color-text-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:10,cursor:"pointer" }}>
+                RE-RECORD
+              </button>
+              <button onClick={submit}
+                style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:COLORS[0].bg,color:"#fff",border:"none",borderRadius:10,cursor:"pointer" }}>
+                SUBMIT
+              </button>
+            </>
+          )}
+        </div>
+
+        <div style={{ textAlign:"center",borderTop:"1px solid var(--color-border-tertiary)",paddingTop:14 }}>
+          <span style={{ fontSize:12,color:"var(--color-text-tertiary)" }}>Or </span>
+          <label style={{ fontSize:12,color:COLORS[0].bg,cursor:"pointer",fontWeight:500,textDecoration:"underline" }}>
+            upload an audio file
+            <input type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.ogg,.aac,.mp4" style={{display:"none"}}
+              onChange={e=>{ if(e.target.files[0]) onAudioReady(e.target.files[0]); e.target.value=""; }} />
+          </label>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ── MyCopyCode ────────────────────────────────────────────────
 function MyCopyCode({ username, notify }) {
   const code = makeCode(username);
   const [copied, setCopied] = useState(false);
   const fallback = (text) => {
     const ta = document.createElement("textarea");
-    ta.value = text; ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+    ta.value=text; ta.style.cssText="position:fixed;top:0;left:0;opacity:0";
     document.body.appendChild(ta); ta.focus(); ta.select();
     try { document.execCommand("copy"); } catch {}
     document.body.removeChild(ta);
   };
   const copy = () => {
-    const finish = () => { setCopied(true); notify("Code copied!", 1500); setTimeout(()=>setCopied(false),2000); };
-    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(code).then(finish).catch(()=>{ fallback(code); finish(); });
+    const finish = () => { setCopied(true); notify("Code copied!",1500); setTimeout(()=>setCopied(false),2000); };
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(code).then(finish).catch(()=>{fallback(code);finish();});
     else { fallback(code); finish(); }
   };
   return (
@@ -96,6 +274,7 @@ function MyCopyCode({ username, notify }) {
   );
 }
 
+// ── LoginScreen ───────────────────────────────────────────────
 function LoginScreen({ onEnter, prefillLink }) {
   const [name, setName] = useState("");
   const submit = () => { const n=name.trim(); if(n) onEnter(n); };
@@ -107,7 +286,7 @@ function LoginScreen({ onEnter, prefillLink }) {
         </div>
         <h1 style={{ fontSize:28,fontWeight:500,margin:"0 0 6px",textAlign:"center",letterSpacing:"-0.3px" }}>Community Orchestra</h1>
         <p style={{ fontSize:14,color:"var(--color-text-secondary)",margin:"0 0 36px",textAlign:"center",lineHeight:1.6 }}>
-          {prefillLink ? <><strong style={{fontWeight:500}}>{prefillLink}</strong> wants to link with you!<br/>Enter your name to join.</> : <>Record your sound. Link with others.<br/>Play together.</>}
+          {prefillLink?<><strong style={{fontWeight:500}}>{prefillLink}</strong> wants to link with you!<br/>Enter your name to join.</>:<>Record your sound. Link with others.<br/>Play together.</>}
         </p>
         <div style={{ width:"100%",display:"flex",flexDirection:"column",gap:12 }}>
           <input autoFocus placeholder="Enter your name" value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} maxLength={24}
@@ -122,6 +301,7 @@ function LoginScreen({ onEnter, prefillLink }) {
   );
 }
 
+// ── Track ─────────────────────────────────────────────────────
 function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, onUnlink, isOwn, onRecordingChange, anyRecording }) {
   const eventsRef = useRef([]);
   const [events, setEvents] = useState([]);
@@ -164,7 +344,7 @@ function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, o
   useEffect(() => {
     if (!globalPlaying || eventsRef.current.length===0) return;
     const elapsed = globalPhase * LOOP_DURATION;
-    const cycle = Math.floor(Date.now() / (LOOP_DURATION*1000));
+    const cycle = Math.floor(Date.now()/(LOOP_DURATION*1000));
     eventsRef.current.forEach((ev,i) => {
       const dist = (elapsed - ev.start + LOOP_DURATION) % LOOP_DURATION;
       if (dist < 0.055 && lastCycleRef.current[i] !== cycle) {
@@ -196,18 +376,15 @@ function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, o
     const buf = getBuffer(pressedSlotIdx);
     const node = startNoteFromBuf(buf, 0.8);
     if (node) loopNodesRef.current["live"] = node;
-    pendingHoldRef.current = { start: t, pressedSlot: pressedSlotIdx };
+    pendingHoldRef.current = { start:t, pressedSlot:pressedSlotIdx };
   }, [getBuffer, startNoteFromBuf, stopNote]);
 
   const onPressUp = useCallback((pressedSlotIdx) => {
     stopNote(loopNodesRef.current["live"]); delete loopNodesRef.current["live"];
     if (pendingHoldRef.current !== null) {
-      const { start: startT, pressedSlot } = pendingHoldRef.current;
+      const { start:startT, pressedSlot } = pendingHoldRef.current;
       const endT = Math.min((performance.now()/1000-recordStartRef.current)%LOOP_DURATION, LOOP_DURATION-0.01);
-      if (endT > startT) {
-        eventsRef.current = [...eventsRef.current, { start:startT, end:endT, pressedSlot }];
-        setEvents([...eventsRef.current]);
-      }
+      if (endT > startT) { eventsRef.current=[...eventsRef.current,{start:startT,end:endT,pressedSlot}]; setEvents([...eventsRef.current]); }
       pendingHoldRef.current = null;
     }
   }, [stopNote]);
@@ -230,10 +407,10 @@ function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, o
     clearTimeout(autoStopRef.current); clearInterval(progIntervalRef.current);
     const now = (performance.now()/1000-recordStartRef.current)%LOOP_DURATION;
     if (pendingHoldRef.current !== null) {
-      const { start: startT, pressedSlot } = pendingHoldRef.current;
-      const endT = Math.min(auto ? LOOP_DURATION-0.01 : now, LOOP_DURATION-0.01);
-      if (endT > startT) eventsRef.current = [...eventsRef.current, { start:startT, end:endT, pressedSlot }];
-      pendingHoldRef.current = null;
+      const { start:startT, pressedSlot } = pendingHoldRef.current;
+      const endT = Math.min(auto?LOOP_DURATION-0.01:now, LOOP_DURATION-0.01);
+      if (endT > startT) eventsRef.current=[...eventsRef.current,{start:startT,end:endT,pressedSlot}];
+      pendingHoldRef.current=null;
     }
     setEvents([...eventsRef.current]);
     setRecording(false); setRecProgress(0);
@@ -245,8 +422,7 @@ function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, o
     eventsRef.current=[]; setEvents([]);
     Object.values(loopNodesRef.current).forEach(n=>stopNote(n,0.05));
     loopNodesRef.current={}; clearTimeout(autoStopRef.current); clearInterval(progIntervalRef.current);
-    setRecording(false); setRecProgress(0);
-    mutedRef.current=false; setMuted(false);
+    setRecording(false); setRecProgress(0); mutedRef.current=false; setMuted(false);
   };
 
   const toggleMute = () => {
@@ -265,9 +441,7 @@ function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, o
 
   return (
     <div style={{ display:"flex",alignItems:"center",gap:8,opacity:muted?0.5:1,transition:"opacity 0.2s" }}>
-      <div style={{ width:22,height:22,borderRadius:"50%",background:slot.color.bg,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:10,fontWeight:500,flexShrink:0 }}>
-        {slotIdx+1}
-      </div>
+      <div style={{ width:22,height:22,borderRadius:"50%",background:slot.color.bg,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:10,fontWeight:500,flexShrink:0 }}>{slotIdx+1}</div>
       <div style={{ flex:1,display:"flex",flexDirection:"column",gap:3,minWidth:0 }}>
         <div style={{ position:"relative",height:3,background:"var(--color-border-tertiary)",borderRadius:2 }}>
           {globalPlaying&&<div style={{ position:"absolute",top:-2,left:`${globalPhase*100}%`,width:2,height:7,background:"#E24B4A",borderRadius:1,transform:"translateX(-50%)" }} />}
@@ -276,31 +450,18 @@ function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, o
         </div>
         <div style={{ display:"flex",gap:2 }}>
           {grid.map((slotSource,ci)=>{
-            const lit = slotSource !== null;
-            const cellColor = lit ? COLORS[slotSource % COLORS.length].bg : null;
-            const isHead = ci===phHead && globalPlaying;
-            return (
-              <div key={ci} style={{ flex:1,height:18,borderRadius:3,
-                background: lit ? cellColor : isHead ? `${slot.color.bg}44` : "var(--color-border-tertiary)",
-                opacity: lit?(muted?0.25:1):0.4,transition:"background 0.04s" }} />
-            );
+            const lit=slotSource!==null;
+            const cellColor=lit?COLORS[slotSource%COLORS.length].bg:null;
+            const isHead=ci===phHead&&globalPlaying;
+            return <div key={ci} style={{ flex:1,height:18,borderRadius:3,background:lit?cellColor:isHead?`${slot.color.bg}44`:"var(--color-border-tertiary)",opacity:lit?(muted?0.25:1):0.4,transition:"background 0.04s" }} />;
           })}
         </div>
       </div>
       <div style={{ display:"flex",alignItems:"center",gap:4,flexShrink:0 }}>
-        {hasEvents&&!recording&&(
-          <>
-            <button onClick={toggleMute} title={muted?"Unmute":"Mute"}
-              style={{ fontSize:13,width:24,height:24,borderRadius:5,border:"1px solid var(--color-border-secondary)",background:muted?slot.color.bg:"transparent",color:muted?"#fff":"var(--color-text-tertiary)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}>
-              {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
-            </button>
-          </>
-        )}
         {!recording?(
-          <button onClick={startRecord}
-            disabled={muted}
+          <button onClick={startRecord} disabled={muted}
             style={{ width:28,height:28,borderRadius:"50%",border:"none",background:(anyRecording&&!recording)||muted?"var(--color-border-secondary)":slot.color.bg,cursor:(anyRecording&&!recording)||muted?"default":"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:(anyRecording&&!recording)||muted?0.4:1 }}>
-            {hasEvents ? <span style={{ fontSize:13,color:"#fff",lineHeight:1 }}>↺</span> : <div style={{ width:9,height:9,borderRadius:"50%",background:"#fff" }} />}
+            {hasEvents?<span style={{ fontSize:13,color:"#fff",lineHeight:1 }}>↺</span>:<div style={{ width:9,height:9,borderRadius:"50%",background:"#fff" }} />}
           </button>
         ):(
           <button onClick={()=>finishRecord(false)}
@@ -310,11 +471,10 @@ function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, o
         )}
         {hasEvents&&!recording&&(
           <>
-            <button onClick={clearTrack} title="Clear"
-              style={{ fontSize:11,width:24,height:24,borderRadius:5,border:"1px solid var(--color-border-secondary)",background:"transparent",color:"var(--color-text-tertiary)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}>✕</button>
+            <button onClick={clearTrack} style={{ fontSize:11,width:24,height:24,borderRadius:5,border:"1px solid var(--color-border-secondary)",background:"transparent",color:"var(--color-text-tertiary)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}>✕</button>
             <button onClick={toggleMute} title={muted?"Unmute":"Mute"}
               style={{ fontSize:13,width:24,height:24,borderRadius:5,border:"1px solid var(--color-border-secondary)",background:muted?slot.color.bg:"transparent",color:muted?"#fff":"var(--color-text-tertiary)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}>
-              {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+              {muted?<VolumeX size={14}/>:<Volume2 size={14}/>}
             </button>
           </>
         )}
@@ -323,6 +483,7 @@ function Track({ slotIdx, slot, getBuffer, getCtx, globalPlaying, globalPhase, o
   );
 }
 
+// ── Instrument ────────────────────────────────────────────────
 function Instrument({ username, autoLinkWith }) {
   const ctxRef = useRef(null);
   const getCtx = useCallback(() => {
@@ -336,9 +497,6 @@ function Instrument({ username, autoLinkWith }) {
   const heldNodesRef = useRef({});
   const playheadRafRef = useRef(null);
   const globalPlayingRef = useRef(false);
-  const micRecorderRef = useRef(null);
-  const micChunksRef = useRef([]);
-  const micCountdownRef = useRef(null);
 
   const [slots, setSlots] = useState([{ owner:username, color:COLORS[0], hasSound:false }]);
   const [activeBtn, setActiveBtn] = useState(null);
@@ -351,11 +509,10 @@ function Instrument({ username, autoLinkWith }) {
   const [activeRecording, setActiveRecording] = useState(null);
   const [linkCodeInput, setLinkCodeInput] = useState("");
   const [linkCodeError, setLinkCodeError] = useState(null);
-  const [micRecording, setMicRecording] = useState(false);
-  const [micCountdown, setMicCountdown] = useState(null);
+  const [showRecordModal, setShowRecordModal] = useState(false);
 
   const notify = (msg,dur=2500) => { setNotification(msg); setTimeout(()=>setNotification(null),dur); };
-  const handleRecordingChange = useCallback((state) => { setActiveRecording(state.recording ? state : null); }, []);
+  const handleRecordingChange = useCallback((state) => { setActiveRecording(state.recording?state:null); }, []);
 
   const getDemoBuffer = useCallback((userName) => {
     const ctx=getCtx(), key=`demo_${userName}`;
@@ -376,16 +533,10 @@ function Instrument({ username, autoLinkWith }) {
   }, [getDemoBuffer, slots]);
 
   useEffect(() => {
-    if (!globalPlaying) {
-      globalPlayingRef.current=false; cancelAnimationFrame(playheadRafRef.current); setGlobalPhase(0); return;
-    }
+    if (!globalPlaying) { globalPlayingRef.current=false; cancelAnimationFrame(playheadRafRef.current); setGlobalPhase(0); return; }
     globalPlayingRef.current=true;
     const startWall=performance.now()/1000;
-    const tick=()=>{
-      if (!globalPlayingRef.current) return;
-      setGlobalPhase(((performance.now()/1000-startWall)%LOOP_DURATION)/LOOP_DURATION);
-      playheadRafRef.current=requestAnimationFrame(tick);
-    };
+    const tick=()=>{ if (!globalPlayingRef.current) return; setGlobalPhase(((performance.now()/1000-startWall)%LOOP_DURATION)/LOOP_DURATION); playheadRafRef.current=requestAnimationFrame(tick); };
     playheadRafRef.current=requestAnimationFrame(tick);
     return ()=>{ globalPlayingRef.current=false; cancelAnimationFrame(playheadRafRef.current); };
   }, [globalPlaying]);
@@ -393,93 +544,49 @@ function Instrument({ username, autoLinkWith }) {
   const startHold = useCallback((idx) => {
     const ctx=getCtx(), buf=getBuffer(idx);
     if (!buf) return;
-    if (heldNodesRef.current[idx]) {
-      try { heldNodesRef.current[idx].gain.gain.linearRampToValueAtTime(0,ctx.currentTime+0.05); heldNodesRef.current[idx].src.stop(ctx.currentTime+0.06); } catch {}
-    }
+    if (heldNodesRef.current[idx]) { try { heldNodesRef.current[idx].gain.gain.linearRampToValueAtTime(0,ctx.currentTime+0.05); heldNodesRef.current[idx].src.stop(ctx.currentTime+0.06); } catch {} }
     const gain=ctx.createGain();
     gain.gain.setValueAtTime(0,ctx.currentTime); gain.gain.linearRampToValueAtTime(0.8,ctx.currentTime+0.03);
     gain.connect(ctx.destination);
     const src=ctx.createBufferSource();
     src.buffer=buf; src.loop=true; src.loopStart=0; src.loopEnd=buf.duration;
     src.connect(gain); src.start();
-    heldNodesRef.current[idx]={src,gain};
-    setActiveBtn(idx);
+    heldNodesRef.current[idx]={src,gain}; setActiveBtn(idx);
   }, [getCtx,getBuffer]);
 
   const stopHold = useCallback((idx) => {
-    const node=heldNodesRef.current[idx];
-    if (!node) return;
+    const node=heldNodesRef.current[idx]; if (!node) return;
     const ctx=getCtx();
-    try {
-      node.gain.gain.cancelScheduledValues(ctx.currentTime);
-      node.gain.gain.setValueAtTime(node.gain.gain.value,ctx.currentTime);
-      node.gain.gain.linearRampToValueAtTime(0,ctx.currentTime+0.12);
-      node.src.stop(ctx.currentTime+0.13);
-    } catch {}
-    delete heldNodesRef.current[idx];
-    setActiveBtn(null);
+    try { node.gain.gain.cancelScheduledValues(ctx.currentTime); node.gain.gain.setValueAtTime(node.gain.gain.value,ctx.currentTime); node.gain.gain.linearRampToValueAtTime(0,ctx.currentTime+0.12); node.src.stop(ctx.currentTime+0.13); } catch {}
+    delete heldNodesRef.current[idx]; setActiveBtn(null);
   }, [getCtx]);
 
   const processAudioBlob = useCallback(async (blob) => {
     try {
-      const ab = await blob.arrayBuffer();
-      const ctx = getCtx();
+      const ab=await blob.arrayBuffer(), ctx=getCtx();
       if (ctx.state==="suspended") await ctx.resume();
-      const raw = await ctx.decodeAudioData(ab);
-      const trimmed = trimSilence(ctx, raw);
-      audioBuffersRef.current[0] = trimmed;
+      const raw=await ctx.decodeAudioData(ab);
+      const trimmed=trimSilence(ctx,raw);
+      audioBuffersRef.current[0]=trimmed;
       setSlots(s=>{const n=[...s];n[0]={...n[0],hasSound:true};return n;});
       notify("Sound ready! Uploading…");
-      const wav = encodeWAV(trimmed);
-      const wavBlob = new Blob([wav], { type:"audio/wav" });
+      const wav=encodeWAV(trimmed);
+      const wavBlob=new Blob([wav],{type:"audio/wav"});
       try {
-        const form = new FormData();
-        form.append("audio", wavBlob, `${makeCode(username)}.wav`);
-        const res = await fetch(`${SERVER}/audio/${makeCode(username)}`, { method:"POST", body:form });
+        const form=new FormData();
+        form.append("audio",wavBlob,`${makeCode(username)}.wav`);
+        const res=await fetch(`${SERVER}/audio/${makeCode(username)}`,{method:"POST",body:form});
         if (res.ok) notify("Sound uploaded! Others can now link with your code.");
         else notify("Sound ready locally, but server upload failed.");
       } catch { notify("Sound ready locally. Server unavailable."); }
     } catch { setUploadError("Couldn't decode audio. Please try again."); }
   }, [getCtx, username]);
 
-  const startMicRecord = async () => {
+  const handleAudioReady = useCallback(async (blob) => {
+    setShowRecordModal(false);
     setUploadError(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
-      micChunksRef.current = [];
-      const mimeType = ["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/ogg"].find(t=>MediaRecorder.isTypeSupported(t)) || "";
-      const mr = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      mr.ondataavailable = e => { if (e.data?.size>0) micChunksRef.current.push(e.data); };
-      mr.onstop = async () => {
-        stream.getTracks().forEach(t=>t.stop());
-        if (!micChunksRef.current.length) { setUploadError("No audio captured. Try again."); return; }
-        const blob = new Blob(micChunksRef.current, { type: mimeType||"audio/webm" });
-        await processAudioBlob(blob);
-      };
-      mr.start(100);
-      micRecorderRef.current = mr;
-      setMicRecording(true);
-      let t=10; setMicCountdown(t);
-      micCountdownRef.current = setInterval(()=>{
-        t--;
-        if (t<=0) { clearInterval(micCountdownRef.current); setMicCountdown(null); mr.stop(); setMicRecording(false); }
-        else setMicCountdown(t);
-      }, 1000);
-    } catch { setUploadError("Mic access denied. Please allow microphone access and try again."); }
-  };
-
-  const stopMicRecord = () => {
-    if (micRecorderRef.current && micRecording) {
-      clearInterval(micCountdownRef.current); setMicCountdown(null);
-      micRecorderRef.current.stop(); setMicRecording(false);
-    }
-  };
-
-  const handleUpload = async (file) => {
-    if (!file) return;
-    setUploadError(null);
-    await processAudioBlob(file);
-  };
+    await processAudioBlob(blob);
+  }, [processAudioBlob]);
 
   const unlinkSlot = useCallback((ownerName) => {
     setSlots(prev=>prev.filter(s=>s.owner!==ownerName));
@@ -520,32 +627,26 @@ function Instrument({ username, autoLinkWith }) {
     } else {
       notify(`Looking up ${raw}…`,1500);
       try {
-        const res = await fetch(`${SERVER}/audio/${raw}`);
+        const res=await fetch(`${SERVER}/audio/${raw}`);
         if (res.ok) {
-          const blob = await res.blob();
-          const ab = await blob.arrayBuffer();
-          const ctx = getCtx();
+          const blob=await res.blob(), ab=await blob.arrayBuffer(), ctx=getCtx();
           if (ctx.state==="suspended") await ctx.resume();
-          const audioBuf = await ctx.decodeAudioData(ab);
-          const key = `custom_${ownerName}`;
-          audioBuffersRef.current[key] = trimSilence(ctx, audioBuf);
+          const audioBuf=await ctx.decodeAudioData(ab);
+          const key=`custom_${ownerName}`;
+          audioBuffersRef.current[key]=trimSilence(ctx,audioBuf);
           setSlots(prev=>[...prev,{owner:ownerName,color,hasSound:true,customKey:key}]);
           notify(`${raw} linked! Their sound added as button ${slots.length+1}! 🎵`,3000);
         } else {
-          const ctx=getCtx();
-          const hash=[...ownerName].reduce((a,c)=>(a*31+c.charCodeAt(0))&0xffff,0);
+          const ctx=getCtx(), hash=[...ownerName].reduce((a,c)=>(a*31+c.charCodeAt(0))&0xffff,0);
           const buf=synthBuffer(ctx,["sine","square","sawtooth","triangle"][hash%4],110+(hash%8)*55,0.35);
-          const key=`custom_${ownerName}`;
-          audioBuffersRef.current[key]=buf;
+          const key=`custom_${ownerName}`; audioBuffersRef.current[key]=buf;
           setSlots(prev=>[...prev,{owner:ownerName,color,hasSound:true,customKey:key}]);
           notify(`${raw} linked with demo sound (they haven't uploaded yet).`,3000);
         }
       } catch {
-        const ctx=getCtx();
-        const hash=[...ownerName].reduce((a,c)=>(a*31+c.charCodeAt(0))&0xffff,0);
+        const ctx=getCtx(), hash=[...ownerName].reduce((a,c)=>(a*31+c.charCodeAt(0))&0xffff,0);
         const buf=synthBuffer(ctx,["sine","square","sawtooth","triangle"][hash%4],110+(hash%8)*55,0.35);
-        const key=`custom_${ownerName}`;
-        audioBuffersRef.current[key]=buf;
+        const key=`custom_${ownerName}`; audioBuffersRef.current[key]=buf;
         setSlots(prev=>[...prev,{owner:ownerName,color,hasSound:true,customKey:key}]);
         notify(`${raw} linked with demo sound (server unreachable).`,3000);
       }
@@ -559,20 +660,12 @@ function Instrument({ username, autoLinkWith }) {
     setTimeout(()=>{
       if (matchIdx>=0) {
         setLinkedUsers(prev=>{const n=[...prev];n[matchIdx]=true;return n;});
-        setSlots(prev=>{
-          if (prev.some(s=>s.owner===autoLinkWith)||prev.length>=MAX_SLOTS) return prev;
-          return [...prev,{owner:autoLinkWith,color:COLORS[prev.length%COLORS.length],hasSound:true}];
-        });
+        setSlots(prev=>{ if(prev.some(s=>s.owner===autoLinkWith)||prev.length>=MAX_SLOTS) return prev; return [...prev,{owner:autoLinkWith,color:COLORS[prev.length%COLORS.length],hasSound:true}]; });
       } else {
-        const ctx=getCtx();
-        const hash=[...autoLinkWith].reduce((a,c)=>(a*31+c.charCodeAt(0))&0xffff,0);
+        const ctx=getCtx(), hash=[...autoLinkWith].reduce((a,c)=>(a*31+c.charCodeAt(0))&0xffff,0);
         const buf=synthBuffer(ctx,["sine","square","sawtooth","triangle"][hash%4],110+(hash%8)*55,0.35);
-        const key=`custom_${autoLinkWith}`;
-        audioBuffersRef.current[key]=buf;
-        setSlots(prev=>{
-          if (prev.some(s=>s.owner===autoLinkWith)||prev.length>=MAX_SLOTS) return prev;
-          return [...prev,{owner:autoLinkWith,color:COLORS[prev.length%COLORS.length],hasSound:true,customKey:key}];
-        });
+        const key=`custom_${autoLinkWith}`; audioBuffersRef.current[key]=buf;
+        setSlots(prev=>{ if(prev.some(s=>s.owner===autoLinkWith)||prev.length>=MAX_SLOTS) return prev; return [...prev,{owner:autoLinkWith,color:COLORS[prev.length%COLORS.length],hasSound:true,customKey:key}]; });
       }
       notify(`${makeCode(autoLinkWith)}'s sound added!`,3500);
     },500);
@@ -582,14 +675,14 @@ function Instrument({ username, autoLinkWith }) {
 
   return (
     <div style={{ minHeight:"100vh",padding:"20px 16px",fontFamily:"var(--font-sans)",color:"var(--color-text-primary)",maxWidth:580,margin:"0 auto" }}>
+      {showRecordModal && <RecordModal onClose={()=>setShowRecordModal(false)} onAudioReady={handleAudioReady} username={username} />}
+
       <div style={{ marginBottom:20 }}>
         <h1 style={{ fontSize:22,fontWeight:500,margin:0 }}>Community Orchestra</h1>
         <p style={{ fontSize:13,color:"var(--color-text-secondary)",margin:"3px 0 0" }}>Playing as <strong style={{fontWeight:500}}>{username}</strong></p>
       </div>
 
-      {notification&&(
-        <div style={{ background:"var(--color-background-info)",color:"var(--color-text-info)",border:"1px solid var(--color-border-info)",borderRadius:8,padding:"9px 13px",fontSize:13,marginBottom:16 }}>{notification}</div>
-      )}
+      {notification&&<div style={{ background:"var(--color-background-info)",color:"var(--color-text-info)",border:"1px solid var(--color-border-info)",borderRadius:8,padding:"9px 13px",fontSize:13,marginBottom:16 }}>{notification}</div>}
 
       {/* Sound buttons */}
       <div style={{ marginBottom:20 }}>
@@ -601,9 +694,9 @@ function Instrument({ username, autoLinkWith }) {
             const isActive=activeBtn===i;
             return (
               <button key={i}
-                onPointerDown={e=>{ e.currentTarget.setPointerCapture(e.pointerId); if(activeRecording) activeRecording.onPressDown(i); else startHold(i); }}
-                onPointerUp={()=>{ if(activeRecording) activeRecording.onPressUp(i); else stopHold(i); }}
-                onPointerLeave={()=>{ if(activeRecording) activeRecording.onPressUp(i); else stopHold(i); }}
+                onPointerDown={e=>{e.currentTarget.setPointerCapture(e.pointerId);if(activeRecording)activeRecording.onPressDown(i);else startHold(i);}}
+                onPointerUp={()=>{if(activeRecording)activeRecording.onPressUp(i);else stopHold(i);}}
+                onPointerLeave={()=>{if(activeRecording)activeRecording.onPressUp(i);else stopHold(i);}}
                 style={{ background:isActive?slot.color.bg:slot.color.light,border:`2px solid ${slot.color.bg}66`,borderRadius:12,padding:"14px 4px 10px",cursor:"pointer",transition:"all 0.07s",transform:isActive?"scale(0.91)":"scale(1)",display:"flex",flexDirection:"column",alignItems:"center",gap:5,touchAction:"none",userSelect:"none",boxShadow:activeRecording?`0 0 0 2px ${slot.color.bg}44`:"none" }}>
                 <div style={{ width:32,height:32,borderRadius:"50%",background:slot.color.bg,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:500,fontSize:15 }}>{i+1}</div>
                 <div style={{ fontSize:9,color:slot.color.dark,fontWeight:500,textAlign:"center",lineHeight:1.3,fontFamily:"var(--font-mono)" }}>{makeCode(slot.owner).split("-")[0]}</div>
@@ -622,10 +715,7 @@ function Instrument({ username, autoLinkWith }) {
       {/* Tracks */}
       <div style={{ background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:12,padding:16,marginBottom:16 }}>
         <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10 }}>
-          <div>
-            <span style={{ fontSize:13,fontWeight:500 }}>Tracks</span>
-            <span style={{ fontSize:11,color:"var(--color-text-tertiary)",marginLeft:6 }}>{LOOP_DURATION}s each</span>
-          </div>
+          <div><span style={{ fontSize:13,fontWeight:500 }}>Tracks</span><span style={{ fontSize:11,color:"var(--color-text-tertiary)",marginLeft:6 }}>{LOOP_DURATION}s each</span></div>
           <button onClick={()=>{getCtx();setGlobalPlaying(p=>{globalPlayingRef.current=!p;return !p;});}}
             style={{ fontSize:12,fontWeight:500,padding:"6px 18px",borderRadius:7,border:"none",background:globalPlaying?"#E24B4A":COLORS[0].bg,color:"#fff",cursor:"pointer" }}>
             {globalPlaying?"Pause":"Play all"}
@@ -640,8 +730,7 @@ function Instrument({ username, autoLinkWith }) {
             <Track key={slot.owner} slotIdx={i} slot={slot} getBuffer={getBuffer} getCtx={getCtx}
               globalPlaying={globalPlaying} globalPhase={globalPhase}
               isOwn={i===0} onUnlink={()=>unlinkSlot(slot.owner)}
-              onRecordingChange={handleRecordingChange}
-              anyRecording={!!activeRecording} />
+              onRecordingChange={handleRecordingChange} anyRecording={!!activeRecording} />
           ))}
         </div>
       </div>
@@ -649,30 +738,14 @@ function Instrument({ username, autoLinkWith }) {
       {/* Your sound */}
       <div style={{ background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:12,padding:16,marginBottom:16 }}>
         <div style={{ fontSize:13,fontWeight:500,marginBottom:4 }}>Your sound</div>
-        <p style={{ fontSize:12,color:"var(--color-text-tertiary)",margin:"0 0 12px" }}>Record directly or upload a file.</p>
+        <p style={{ fontSize:12,color:"var(--color-text-tertiary)",margin:"0 0 12px" }}>
+          {slots[0].hasSound?"Your sound is ready. You can replace it below.":"Record or upload a short sound — a clap, hum, voice, anything."}
+        </p>
         {uploadError&&<div style={{ fontSize:12,color:"var(--color-text-danger)",background:"var(--color-background-danger)",border:"1px solid var(--color-border-danger)",borderRadius:7,padding:"8px 12px",marginBottom:10 }}>{uploadError}</div>}
-        <div style={{ marginBottom:14 }}>
-          <div style={{ fontSize:12,color:"var(--color-text-tertiary)",marginBottom:8 }}>Option 1 — record with your mic</div>
-          <div style={{ display:"flex",alignItems:"center",gap:10 }}>
-            {!micRecording
-              ? <button onClick={startMicRecord} style={{ background:COLORS[0].bg,color:"#fff",border:"none",borderRadius:8,padding:"10px 18px",fontSize:13,fontWeight:500,cursor:"pointer" }}>
-                  {slots[0].hasSound?"Re-record":"Record (up to 10s)"}
-                </button>
-              : <button onClick={stopMicRecord} style={{ background:"#E24B4A",color:"#fff",border:"none",borderRadius:8,padding:"10px 18px",fontSize:13,fontWeight:500,cursor:"pointer",animation:"pulse 0.7s ease-in-out infinite" }}>
-                  {micCountdown!==null?`Recording… ${micCountdown}s`:"Stop"}
-                </button>
-            }
-            {micRecording&&<div style={{ display:"flex",gap:3 }}>{[0,1,2].map(i=><div key={i} style={{ width:5,height:5,borderRadius:"50%",background:"#E24B4A",animation:`bounce 0.8s ease-in-out ${i*0.15}s infinite` }} />)}</div>}
-          </div>
-        </div>
-        <div style={{ borderTop:"1px solid var(--color-border-tertiary)",paddingTop:12 }}>
-          <div style={{ fontSize:12,color:"var(--color-text-tertiary)",marginBottom:8 }}>Option 2 — upload a file</div>
-          <label style={{ display:"inline-flex",alignItems:"center",gap:8,background:"var(--color-background-primary)",color:"var(--color-text-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:8,padding:"10px 18px",fontSize:13,fontWeight:500,cursor:"pointer" }}>
-            {slots[0].hasSound?"Replace sound":"Upload audio"}
-            <input type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.ogg,.aac,.mp4" style={{display:"none"}} onChange={e=>{handleUpload(e.target.files[0]);e.target.value="";}} />
-          </label>
-          <p style={{ fontSize:11,color:"var(--color-text-tertiary)",margin:"8px 0 0" }}>WAV, MP3, M4A, or any audio file.</p>
-        </div>
+        <button onClick={()=>setShowRecordModal(true)}
+          style={{ width:"100%",padding:"12px",fontSize:14,fontWeight:500,background:COLORS[0].bg,color:"#fff",border:"none",borderRadius:9,cursor:"pointer" }}>
+          {slots[0].hasSound?"Replace sound":"Record audio"}
+        </button>
       </div>
 
       {/* Link with another artist */}
@@ -689,7 +762,7 @@ function Instrument({ username, autoLinkWith }) {
         <MyCopyCode username={username} notify={notify} />
       </div>
 
-      {/* Linked artists (code-linked) */}
+      {/* Linked artists */}
       {customLinked.length>0&&(
         <div style={{ background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:12,padding:16,marginBottom:16 }}>
           <div style={{ fontSize:13,fontWeight:500,marginBottom:4 }}>Linked artists</div>
