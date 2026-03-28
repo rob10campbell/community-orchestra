@@ -49,6 +49,25 @@ function trimSilence(ctx, buf, threshold=0.01) {
   return out;
 }
 
+function normalizeAudio(buf, targetPeak=0.9) {
+  const out = buf;
+  let peak = 0;
+  for (let c=0; c<buf.numberOfChannels; c++) {
+    const data = buf.getChannelData(c);
+    for (let i=0; i<data.length; i++) peak = Math.max(peak, Math.abs(data[i]));
+  }
+  if (peak === 0 || peak >= targetPeak) return out;
+  const gain = targetPeak / peak;
+  const ctx = new OfflineAudioContext(buf.numberOfChannels, buf.length, buf.sampleRate);
+  const newBuf = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
+  for (let c=0; c<buf.numberOfChannels; c++) {
+    const src = buf.getChannelData(c);
+    const dst = newBuf.getChannelData(c);
+    for (let i=0; i<src.length; i++) dst[i] = src[i] * gain;
+  }
+  return newBuf;
+}
+
 function encodeWAV(audioBuf) {
   const numCh = audioBuf.numberOfChannels, numSamples = audioBuf.length, sr = audioBuf.sampleRate;
   const buf = new ArrayBuffer(44 + numSamples * numCh * 2);
@@ -304,7 +323,7 @@ function LoginScreen({ onEnter, prefillLink }) {
           {prefillLink?<><strong style={{fontWeight:500}}>{prefillLink}</strong> wants to link with you!<br/>Enter your name to join.</>:<>Record your sound. Link with others.<br/>Play together.</>}
         </p>
         <div style={{ width:"100%",display:"flex",flexDirection:"column",gap:12 }}>
-          <input autoFocus placeholder="Enter your name" value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} maxLength={24}
+          <input autoFocus placeholder="Enter your name (max 5 characters)" value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} maxLength={5}
             style={{ width:"100%",boxSizing:"border-box",padding:"13px 16px",fontSize:16,border:"1.5px solid var(--color-border-secondary)",borderRadius:10,background:"var(--color-background-secondary)",color:"var(--color-text-primary)",outline:"none",fontFamily:"var(--font-sans)" }} />
           <button onClick={submit} disabled={!name.trim()}
             style={{ width:"100%",padding:"13px",fontSize:15,fontWeight:500,background:name.trim()?COLORS[0].bg:"var(--color-background-secondary)",color:name.trim()?"#fff":"var(--color-text-tertiary)",border:"none",borderRadius:10,cursor:name.trim()?"pointer":"default",transition:"background 0.2s" }}>
@@ -582,7 +601,8 @@ function Instrument({ username, autoLinkWith }) {
       if (ctx.state==="suspended") await ctx.resume();
       const raw=await ctx.decodeAudioData(ab);
       const trimmed=trimSilence(ctx,raw);
-      audioBuffersRef.current[0]=trimmed;
+      const normalized=normalizeAudio(trimmed);
+      audioBuffersRef.current[0]=normalized;
       setSlots(s=>{const n=[...s];n[0]={...n[0],hasSound:true};return n;});
       notify("Sound ready! Uploading…");
       const wav=encodeWAV(trimmed);
