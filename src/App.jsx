@@ -3,7 +3,7 @@ import { Volume2, VolumeX } from "lucide-react";
 
 const MAX_SLOTS = 5;
 const LOOP_DURATION = 5;
-const SERVER = import.meta.env.VITE_SERVER_URL || "http://localhost:3001";
+const SERVER = "http://localhost:3001";
 
 const COLORS = [
   { bg: "#7F77DD", light: "#EEEDFE", dark: "#3C3489" },
@@ -69,9 +69,8 @@ function encodeWAV(audioBuf) {
   return buf;
 }
 
-// ── Record Modal ──────────────────────────────────────────────
 function RecordModal({ onClose, onAudioReady }) {
-  const [phase, setPhase] = useState("idle"); // idle | recording | recorded
+  const [phase, setPhase] = useState("idle");
   const [countdown, setCountdown] = useState(null);
   const [error, setError] = useState(null);
   const mediaRecorderRef = useRef(null);
@@ -92,34 +91,52 @@ function RecordModal({ onClose, onAudioReady }) {
     audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
     const src = audioCtxRef.current.createMediaStreamSource(stream);
     const analyser = audioCtxRef.current.createAnalyser();
-    analyser.fftSize = 1024;
+    analyser.fftSize = 256;
     src.connect(analyser);
     const data = new Uint8Array(analyser.frequencyBinCount);
+    const COLS = 48;
+    const levels = new Array(COLS).fill(0);
+    let col = 0;
     const draw = () => {
       if (!canvasRef.current) return;
       animFrameRef.current = requestAnimationFrame(draw);
-      analyser.getByteTimeDomainData(data);
+      analyser.getByteFrequencyData(data);
+      // average energy across freq bins
+      const avg = data.reduce((a,v)=>a+v,0) / data.length / 255;
+      levels[col % COLS] = avg;
+      col++;
       const canvas = canvasRef.current;
       const ctx = canvas.getContext("2d");
       const w = canvas.width, h = canvas.height;
       ctx.clearRect(0,0,w,h);
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = "#E24B4A";
-      ctx.beginPath();
-      const slice = w / data.length;
-      let x = 0;
-      for (let i=0; i<data.length; i++) {
-        const y = (data[i]/128) * (h/2);
-        i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
-        x += slice;
+      const colW = Math.floor(w / COLS);
+      const gap = 2;
+      for (let i = 0; i < COLS; i++) {
+        // draw from newest (right) to oldest (left)
+        const idx = ((col - 1 - i) % COLS + COLS) % COLS;
+        const level = levels[idx];
+        const barH = Math.max(2, level * h * 0.95);
+        const x = w - i * (colW + gap) - colW;
+        const y = (h - barH) / 2;
+        const alpha = 0.4 + (1 - i/COLS) * 0.6;
+        ctx.fillStyle = `rgba(226,75,74,${alpha})`;
+        ctx.beginPath();
+        ctx.roundRect(x, y, colW, barH, 3);
+        ctx.fill();
       }
-      ctx.stroke();
     };
     draw();
   };
 
-  const startRecording = async () => {
+  const doStart = async () => {
     setError(null);
+    // stop any existing recording first
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    streamRef.current?.getTracks().forEach(t=>t.stop());
+    stopWaveform();
+    clearInterval(countdownRef.current);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
       streamRef.current = stream;
@@ -148,15 +165,10 @@ function RecordModal({ onClose, onAudioReady }) {
         if (t<=0) { clearInterval(countdownRef.current); setCountdown(null); mr.stop(); }
         else setCountdown(t);
       }, 1000);
-    } catch { setError("Mic access denied. Please allow microphone access."); }
+    } catch { setError("Mic access denied. Please allow microphone access."); setPhase("idle"); }
   };
 
-  const stopRecording = () => {
-    clearInterval(countdownRef.current); setCountdown(null);
-    mediaRecorderRef.current?.stop();
-  };
-
-  const reRecord = () => { blobRef.current=null; setPhase("idle"); stopWaveform(); };
+  const reRecord = () => { blobRef.current=null; doStart(); };
   const submit = () => { if (blobRef.current) onAudioReady(blobRef.current); };
 
   useEffect(() => () => {
@@ -168,7 +180,7 @@ function RecordModal({ onClose, onAudioReady }) {
   return (
     <div onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}
       style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:1000,padding:"0 0 24px" }}>
-      <div style={{ background:"var(--color-background-primary)",borderRadius:20,padding:"24px 20px 20px",width:"100%",maxWidth:480,display:"flex",flexDirection:"column",gap:16 }}>
+      <div className="record-modal-sheet" style={{ borderRadius:20,padding:"24px 20px 20px",width:"100%",maxWidth:480,display:"flex",flexDirection:"column",gap:16,boxShadow:"0 -4px 32px rgba(0,0,0,0.18)" }}>
 
         <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between" }}>
           <h2 style={{ fontSize:17,fontWeight:500,margin:0 }}>
@@ -177,16 +189,17 @@ function RecordModal({ onClose, onAudioReady }) {
           <button onClick={onClose} style={{ background:"none",border:"none",fontSize:22,cursor:"pointer",color:"var(--color-text-tertiary)",lineHeight:1 }}>×</button>
         </div>
 
-        <div style={{ background:"#111",borderRadius:12,overflow:"hidden",height:100,display:"flex",alignItems:"center",justifyContent:"center" }}>
+        {/* Waveform / status display */}
+        <div style={{ background:"var(--color-background-secondary)",borderRadius:12,overflow:"hidden",height:200,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid var(--color-border-tertiary)" }}>
           {phase==="recording" ? (
-            <canvas ref={canvasRef} width={440} height={100} style={{ width:"100%",height:"100%" }} />
+            <canvas ref={canvasRef} width={440} height={200} style={{ width:"100%",height:"100%" }} />
           ) : phase==="recorded" ? (
             <div style={{ display:"flex",alignItems:"center",gap:8,color:"#1D9E75",fontSize:13,fontWeight:500 }}>
               <div style={{ width:10,height:10,borderRadius:"50%",background:"#1D9E75" }} />
               Recording ready
             </div>
           ) : (
-            <div style={{ color:"#666",fontSize:13 }}>Waveform will appear here</div>
+            <div style={{ color:"var(--color-text-tertiary)",fontSize:13 }}>Waveform will appear here</div>
           )}
         </div>
 
@@ -202,34 +215,28 @@ function RecordModal({ onClose, onAudioReady }) {
 
         <div style={{ display:"flex",gap:10 }}>
           {phase==="idle" && (
-            <button onClick={startRecording}
+            <button onClick={doStart}
               style={{ flex:1,padding:"14px",fontSize:15,fontWeight:500,background:"#E24B4A",color:"#fff",border:"none",borderRadius:10,cursor:"pointer",letterSpacing:"0.03em" }}>
               RECORD
             </button>
           )}
           {phase==="recording" && (
-            <>
-              <button onClick={reRecord}
-                style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:"var(--color-background-secondary)",color:"var(--color-text-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:10,cursor:"pointer" }}>
-                RE-RECORD
-              </button>
-              <button onClick={stopRecording}
-                style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:"#E24B4A",color:"#fff",border:"none",borderRadius:10,cursor:"pointer",animation:"pulse 0.7s ease-in-out infinite" }}>
-                STOP
-              </button>
-            </>
+            <button onClick={reRecord}
+              style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:"var(--color-background-secondary)",color:"var(--color-text-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:10,cursor:"pointer" }}>
+              RE-RECORD
+            </button>
+          )}
+          {(phase==="recording" || phase==="recorded") && (
+            <button onClick={submit} disabled={phase==="recording"&&!blobRef.current}
+              style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:phase==="recorded"?COLORS[0].bg:"var(--color-background-secondary)",color:phase==="recorded"?"#fff":"var(--color-text-tertiary)",border:"none",borderRadius:10,cursor:phase==="recorded"?"pointer":"default" }}>
+              SUBMIT
+            </button>
           )}
           {phase==="recorded" && (
-            <>
-              <button onClick={reRecord}
-                style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:"var(--color-background-secondary)",color:"var(--color-text-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:10,cursor:"pointer" }}>
-                RE-RECORD
-              </button>
-              <button onClick={submit}
-                style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:COLORS[0].bg,color:"#fff",border:"none",borderRadius:10,cursor:"pointer" }}>
-                SUBMIT
-              </button>
-            </>
+            <button onClick={reRecord}
+              style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:"var(--color-background-secondary)",color:"var(--color-text-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:10,cursor:"pointer" }}>
+              RE-RECORD
+            </button>
           )}
         </div>
 
@@ -813,6 +820,8 @@ function Instrument({ username, autoLinkWith }) {
       <style>{`
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
         @keyframes bounce{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.9)}}
+        .record-modal-sheet { background: #ffffff; }
+        @media (prefers-color-scheme: dark) { .record-modal-sheet { background: #1c1c1e; } }
       `}</style>
     </div>
   );
