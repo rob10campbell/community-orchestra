@@ -101,7 +101,6 @@ function RecordModal({ onClose, onAudioReady }) {
       if (!canvasRef.current) return;
       animFrameRef.current = requestAnimationFrame(draw);
       analyser.getByteFrequencyData(data);
-      // average energy across freq bins
       const avg = data.reduce((a,v)=>a+v,0) / data.length / 255;
       levels[col % COLS] = avg;
       col++;
@@ -109,21 +108,21 @@ function RecordModal({ onClose, onAudioReady }) {
       const ctx = canvas.getContext("2d");
       const w = canvas.width, h = canvas.height;
       ctx.clearRect(0,0,w,h);
-      const colW = Math.floor(w / COLS);
-      const gap = 2;
+      const colW = Math.floor((w - (COLS-1)*2) / COLS);
       for (let i = 0; i < COLS; i++) {
-        // draw from newest (right) to oldest (left)
-        const idx = ((col - 1 - i) % COLS + COLS) % COLS;
+        const idx = ((col - 1 - (COLS-1-i)) % COLS + COLS) % COLS;
         const level = levels[idx];
-        const barH = Math.max(2, level * h * 0.95);
-        const x = w - i * (colW + gap) - colW;
+        const barH = Math.max(3, level * h * 0.95);
+        const x = i * (colW + 2);
         const y = (h - barH) / 2;
-        const alpha = 0.4 + (1 - i/COLS) * 0.6;
-        ctx.fillStyle = `rgba(226,75,74,${alpha})`;
+        ctx.fillStyle = COLORS[0].bg;
+        ctx.globalAlpha = 0.4 + (i / COLS) * 0.6;
         ctx.beginPath();
-        ctx.roundRect(x, y, colW, barH, 3);
+        if (ctx.roundRect) ctx.roundRect(x, y, colW, barH, 2);
+        else { ctx.rect(x, y, colW, barH); }
         ctx.fill();
       }
+      ctx.globalAlpha = 1;
     };
     draw();
   };
@@ -190,16 +189,17 @@ function RecordModal({ onClose, onAudioReady }) {
         </div>
 
         {/* Waveform / status display */}
-        <div style={{ background:"var(--color-background-secondary)",borderRadius:12,overflow:"hidden",height:200,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid var(--color-border-tertiary)" }}>
-          {phase==="recording" ? (
-            <canvas ref={canvasRef} width={440} height={200} style={{ width:"100%",height:"100%" }} />
-          ) : phase==="recorded" ? (
-            <div style={{ display:"flex",alignItems:"center",gap:8,color:"#1D9E75",fontSize:13,fontWeight:500 }}>
+        <div style={{ background:"var(--color-background-secondary)",borderRadius:12,overflow:"hidden",height:200,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid var(--color-border-tertiary)",position:"relative" }}>
+          <canvas ref={canvasRef} width={440} height={200}
+            style={{ width:"100%",height:"100%",display:phase==="recording"?"block":"none" }} />
+          {phase==="recorded" && (
+            <div style={{ position:"absolute",display:"flex",alignItems:"center",gap:8,color:"#1D9E75",fontSize:13,fontWeight:500 }}>
               <div style={{ width:10,height:10,borderRadius:"50%",background:"#1D9E75" }} />
               Recording ready
             </div>
-          ) : (
-            <div style={{ color:"var(--color-text-tertiary)",fontSize:13 }}>Waveform will appear here</div>
+          )}
+          {phase==="idle" && (
+            <div style={{ position:"absolute",color:"var(--color-text-tertiary)",fontSize:13 }}>Waveform will appear here</div>
           )}
         </div>
 
@@ -214,28 +214,20 @@ function RecordModal({ onClose, onAudioReady }) {
         )}
 
         <div style={{ display:"flex",gap:10 }}>
-          {phase==="idle" && (
+          <button onClick={reRecord}
+            disabled={phase==="idle"}
+            style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:"var(--color-background-secondary)",color:phase==="idle"?"var(--color-text-tertiary)":"var(--color-text-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:10,cursor:phase==="idle"?"default":"pointer",opacity:phase==="idle"?0.4:1 }}>
+            {phase==="idle" ? "RE-RECORD" : "RE-RECORD"}
+          </button>
+          {phase==="idle" ? (
             <button onClick={doStart}
               style={{ flex:1,padding:"14px",fontSize:15,fontWeight:500,background:"#E24B4A",color:"#fff",border:"none",borderRadius:10,cursor:"pointer",letterSpacing:"0.03em" }}>
               RECORD
             </button>
-          )}
-          {phase==="recording" && (
-            <button onClick={reRecord}
-              style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:"var(--color-background-secondary)",color:"var(--color-text-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:10,cursor:"pointer" }}>
-              RE-RECORD
-            </button>
-          )}
-          {(phase==="recording" || phase==="recorded") && (
-            <button onClick={submit} disabled={phase==="recording"&&!blobRef.current}
-              style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:phase==="recorded"?COLORS[0].bg:"var(--color-background-secondary)",color:phase==="recorded"?"#fff":"var(--color-text-tertiary)",border:"none",borderRadius:10,cursor:phase==="recorded"?"pointer":"default" }}>
+          ) : (
+            <button onClick={submit} disabled={phase==="recording"}
+              style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:phase==="recorded"?COLORS[0].bg:"var(--color-background-secondary)",color:phase==="recorded"?"#fff":"var(--color-text-tertiary)",border:"none",borderRadius:10,cursor:phase==="recorded"?"pointer":"default",opacity:phase==="recording"?0.4:1 }}>
               SUBMIT
-            </button>
-          )}
-          {phase==="recorded" && (
-            <button onClick={reRecord}
-              style={{ flex:1,padding:"14px",fontSize:14,fontWeight:500,background:"var(--color-background-secondary)",color:"var(--color-text-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:10,cursor:"pointer" }}>
-              RE-RECORD
             </button>
           )}
         </div>
