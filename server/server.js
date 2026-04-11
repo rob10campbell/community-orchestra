@@ -20,8 +20,9 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 
+app.get("/ping", (req, res) => res.json({ ok: true }));
+
 app.post("/audio/:code", upload.single("audio"), (req, res) => {
-  // Delete any old files for this code
   const files = fs.readdirSync(UPLOAD_DIR);
   files.filter(f => f.startsWith(req.params.code + ".") && f !== req.file.filename)
        .forEach(f => fs.unlinkSync(path.join(UPLOAD_DIR, f)));
@@ -37,4 +38,15 @@ app.get("/audio/:code", (req, res) => {
   res.sendFile(path.resolve(path.join(UPLOAD_DIR, match)));
 });
 
-app.listen(3001, "0.0.0.0", () => console.log("Server running on :3001"));
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on :${PORT}`);
+  // Keep-alive ping for Render free tier
+  const SELF_URL = process.env.RENDER_EXTERNAL_URL;
+  if (SELF_URL) {
+    setInterval(() => {
+      fetch(`${SELF_URL}/ping`).catch(() => {});
+    }, 10 * 60 * 1000);
+    console.log(`Keep-alive ping enabled for ${SELF_URL}`);
+  }
+});
